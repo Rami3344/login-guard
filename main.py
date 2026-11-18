@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 import psycopg
 from argon2 import PasswordHasher
@@ -21,6 +22,7 @@ class LoginRequest(BaseModel):
     password: str
     ip: str  # SIMULATION ONLY: a real API uses request.client.host, never a client-sent IP
     device_id: str
+    at: datetime     # SIMULATION ONLY: a real API lets the DB set the time
 
 
 @app.get("/health")
@@ -64,12 +66,12 @@ def login(body: LoginRequest):
                 success = False
 
         # 3. ALWAYS record the attempt (unknown user and wrong password too)
-        conn.execute(
-            "INSERT INTO login_events (user_id, username, ip, device_id, success)"
-            " VALUES (%s, %s, %s, %s, %s)",
-            (user_id, body.username, body.ip, body.device_id, success),
-        )
+        event_id = conn.execute(
+            "INSERT INTO login_events (user_id, username, ip, device_id, success, created_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (user_id, body.username, body.ip, body.device_id, success, body.at),
+        ).fetchone()[0]
     # 4. the `with` block has ended → the INSERT is committed. Only NOW raise the 401.
     if not success:
-        raise HTTPException(status_code=401, detail="invalid credentials")
-    return {"status": "ok"}
+        raise HTTPException(status_code=401, detail={"error": "invalid credentials", "event_id": event_id})
+    return {"status": "ok", "event_id": event_id}
